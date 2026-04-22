@@ -1,0 +1,15 @@
+name: earningsdashboard
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - pip
+  - pip:
+      - torch
+      - transformers
+      - nltk
+      - yfinance
+      - streamlit
+      - plotly
