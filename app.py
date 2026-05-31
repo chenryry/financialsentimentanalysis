@@ -4,16 +4,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
-from src.priceconda import fetch_event_return
-from src.sentiment import device_label, score_sentences
-from src.transcripts import (
-    get_calls_for,
-    list_tickers,
-    load_dataframe,
-    split_sections,
-    tokenize_sentences,
-)
+from src.prices import fetch_event_return
+from src.scores import is_cached, score_call, summarize_call
+from src.sentiment import device_label
+from src.transcripts import get_calls_for, list_tickers, load_dataframe
 
 st.set_page_config(page_title="Earnings Call Sentiment", layout="wide")
 st.title("Earnings Call Sentiment Dashboard")
@@ -26,13 +22,8 @@ def _corpus():
 
 
 @st.cache_data(show_spinner="Scoring transcript with FinBERT…")
-def _score(transcript: str) -> dict[str, list[dict]]:
-    sections = split_sections(transcript)
-    out: dict[str, list[dict]] = {}
-    for key in ("prepared", "qa"):
-        sents = tokenize_sentences(sections[key])
-        out[key] = [s.to_dict() for s in score_sentences(sents)]
-    return out
+def _score(ticker: str, call_date: pd.Timestamp, _transcript: str) -> pd.DataFrame:
+    return score_call(ticker, call_date, _transcript)
 
 
 @st.cache_data(show_spinner="Fetching price data…")
@@ -65,21 +56,21 @@ with col_b:
     )
 
 row = calls.iloc[choice]
-scored = _score(row["transcript"])
-prepared = pd.DataFrame(scored["prepared"])
-qa = pd.DataFrame(scored["qa"])
-if prepared.empty and qa.empty:
+all_rows = _score(ticker, row["call_date"], row["transcript"])
+if all_rows.empty:
     st.warning("No sentences could be extracted from this transcript.")
     st.stop()
 
-frames = []
-if not prepared.empty:
-    frames.append(prepared.assign(section="Prepared"))
-if not qa.empty:
-    frames.append(qa.assign(section="Q&A"))
-all_rows = pd.concat(frames, ignore_index=True)
+all_rows = all_rows.copy()
 all_rows["signed"] = all_rows["positive"] - all_rows["negative"]
 all_rows["idx"] = range(len(all_rows))
+
+summary = summarize_call(all_rows)
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Sentences", f"{summary['n']:,}")
+m2.metric("Avg signed", f"{summary['avg_signed']:+.3f}")
+m3.metric("% positive", f"{summary['pct_positive'] * 100:.1f}%")
+m4.metric("% negative", f"{summary['pct_negative'] * 100:.1f}%")
 
 st.subheader("Sentiment timeline")
 rolling = all_rows["signed"].rolling(15, min_periods=1).mean()
@@ -139,3 +130,84 @@ c2.dataframe(
     all_rows.nlargest(5, "negative")[["section", "negative", "text"]],
     use_container_width=True, hide_index=True,
 )
+
+st.divider()
+st.subheader(f"Cross-quarter trend — {ticker}")
+
+cached_mask = calls.apply(lambda r: is_cached(ticker, r["call_date"]), axis=1)
+n_total = len(calls)
+n_cached = int(cached_mask.sum())
+
+if n_cached < n_total:
+    missing = n_total - n_cached
+    st.caption(
+        f"{n_cached}/{n_total} calls scored. Score the rest to see the full trend."
+    )
+    if st.button(f"Score remaining {missing} call(s)"):
+        progress = st.progress(0.0, text="Scoring…")
+        to_score = calls.loc[~cached_mask].reset_index(drop=True)
+        for i, r in to_score.iterrows():
+            _score(ticker, r["call_date"], r["transcript"])
+            progress.progress((i + 1) / len(to_score), text=f"Scored {i + 1}/{len(to_score)}")
+        progress.empty()
+        st.rerun()
+else:
+    st.caption(f"All {n_total} calls scored.")
+
+cached_calls = calls.loc[cached_mask].reset_index(drop=True)
+trend_rows: list[dict] = []
+for _, r in cached_calls.iterrows():
+    scored = _score(ticker, r["call_date"], r["transcript"])
+    s = summarize_call(scored)
+    ev_i = _returns(ticker, r["call_date"])
+    trend_rows.append(
+        {
+            "call_date": r["call_date"],
+            "q": r["q"],
+            "avg_signed": s["avg_signed"],
+            "n": s["n"],
+            "abnormal_return": ev_i["abnormal_return"] if ev_i else None,
+        }
+    )
+trend = pd.DataFrame(trend_rows).sort_values("call_date").reset_index(drop=True)
+
+if len(trend) >= 1:
+    fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_trend.add_scatter(
+        x=trend["call_date"], y=trend["avg_signed"], mode="lines+markers",
+        name="Avg signed sentiment", line=dict(color="#3b82f6"),
+    )
+    if trend["abnormal_return"].notna().any():
+        fig_trend.add_scatter(
+            x=trend["call_date"], y=trend["abnormal_return"], mode="lines+markers",
+            name="Abnormal return (±1d)", line=dict(color="#f59e0b", dash="dot"),
+            secondary_y=True,
+        )
+        fig_trend.update_yaxes(title_text="Abnormal return", tickformat=".1%", secondary_y=True)
+    fig_trend.update_yaxes(title_text="Avg signed sentiment", secondary_y=False)
+    fig_trend.update_layout(height=360, xaxis_title="Call date", hovermode="x unified")
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    valid = trend.dropna(subset=["avg_signed", "abnormal_return"])
+    if len(valid) >= 2:
+        st.subheader("Sentiment vs. abnormal return")
+        fig_scatter = px.scatter(
+            valid, x="avg_signed", y="abnormal_return",
+            hover_data={"q": True, "n": True, "call_date": "|%Y-%m-%d"},
+        )
+        if len(valid) >= 3:
+            import numpy as np
+            x = valid["avg_signed"].to_numpy()
+            y = valid["abnormal_return"].to_numpy()
+            slope, intercept = np.polyfit(x, y, 1)
+            xs = np.linspace(x.min(), x.max(), 50)
+            fig_scatter.add_scatter(
+                x=xs, y=slope * xs + intercept, mode="lines",
+                name="linear fit", line=dict(color="#6b7280", dash="dash"),
+            )
+        corr = valid["avg_signed"].corr(valid["abnormal_return"])
+        st.caption(f"Pearson correlation across {len(valid)} call(s): **{corr:+.3f}**")
+        fig_scatter.update_yaxes(tickformat=".1%", title_text="Abnormal return (±1d)")
+        fig_scatter.update_xaxes(title_text="Avg signed sentiment")
+        fig_scatter.update_layout(height=380)
+        st.plotly_chart(fig_scatter, use_container_width=True)

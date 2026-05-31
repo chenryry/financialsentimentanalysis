@@ -1,0 +1,5 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:pip",
+    "python.defaultInterpreterPath": "C:\\Users\\1222b\\anaconda3\\envs\\earningsdashboard\\python.exe"
+}

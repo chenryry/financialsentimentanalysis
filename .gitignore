@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+
+*.pkl
+
+data/scored/
+
+.huggingface/
+.cache/
+
+.DS_Store
+Thumbs.db
