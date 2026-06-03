@@ -13,3 +13,4 @@ dependencies:
       - yfinance
       - streamlit
       - plotly
+      - tqdm
