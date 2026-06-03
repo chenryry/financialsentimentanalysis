@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.transcripts import _parse_date, split_sections, tokenize_sentences
+from src.transcripts import (
+    _parse_date,
+    load_dataframe,
+    split_sections,
+    tokenize_sentences,
+)
 
 SAMPLE = """Apple Inc. (AAPL) Q1 2020 Earnings Call
 
@@ -53,3 +58,25 @@ def test_tokenize_sentences_splits_and_strips():
 
 def test_tokenize_sentences_empty():
     assert tokenize_sentences("") == []
+
+
+def test_load_dataframe_dedupes_keeping_longest_transcript(tmp_path):
+    raw = pd.DataFrame(
+        {
+            "date": ["Jan 28, 2020", "Jan 28, 2020", "Apr 30, 2020"],
+            "ticker": ["aapl", "AAPL", "AAPL"],
+            "q": ["Q1", "Q1", "Q2"],
+            "exchange": ["NASDAQ", "NASDAQ", "NASDAQ"],
+            "transcript": ["short", "a much longer transcript body", "q2 body"],
+        }
+    )
+    pkl = tmp_path / "corpus.pkl"
+    raw.to_pickle(pkl)
+
+    df = load_dataframe(pkl)
+    # Two distinct calls remain (the duplicate Q1 row is collapsed).
+    assert len(df) == 2
+    assert df["ticker"].tolist() == ["AAPL", "AAPL"]
+    q1 = df[df["call_date"] == pd.Timestamp("2020-01-28")].iloc[0]
+    # The longer transcript is the one kept.
+    assert q1["transcript"] == "a much longer transcript body"

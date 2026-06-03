@@ -18,6 +18,16 @@ def load_dataframe(path: str | Path | None = None) -> pd.DataFrame:
     df["call_date"] = df["date"].map(_parse_date)
     df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
     df = df.dropna(subset=["call_date", "ticker", "transcript"])
+    # The raw corpus has many duplicate rows per call (e.g. AAPL: 62 rows for 14
+    # actual calls). Collapse to one row per (ticker, call_date), keeping the
+    # longest transcript, so downstream counts, the call picker, and the
+    # cross-sectional panel each treat a call exactly once.
+    df = df.assign(_len=df["transcript"].str.len())
+    df = (
+        df.sort_values(["ticker", "call_date", "_len"])
+        .drop_duplicates(subset=["ticker", "call_date"], keep="last")
+        .drop(columns="_len")
+    )
     return df.sort_values(["ticker", "call_date"]).reset_index(drop=True)
 
 
