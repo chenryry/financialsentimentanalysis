@@ -8,6 +8,8 @@ __pycache__/
 *.pkl
 
 data/scored/
+data/prices/
+data/panel.parquet
 
 .huggingface/
 .cache/

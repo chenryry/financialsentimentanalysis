@@ -75,10 +75,24 @@ def _sent_tokenizer():
     import nltk
     from nltk.tokenize import sent_tokenize
 
+    # Don't guess resource names: NLTK 3.9 needs 'punkt_tab' while older
+    # releases use 'punkt', and a partial install can make nltk.data.find raise
+    # OSError pointing at the wrong package. Probe by actually tokenizing, and
+    # only download (trying both packages) if that fails.
+    def _works() -> bool:
+        try:
+            sent_tokenize("Ready. Set. Go.")
+            return True
+        except (LookupError, OSError):
+            return False
+
+    if _works():
+        return sent_tokenize
     for pkg in ("punkt_tab", "punkt"):
         try:
-            nltk.data.find(f"tokenizers/{pkg}")
-            return sent_tokenize
-        except LookupError:
             nltk.download(pkg, quiet=True)
+        except Exception:
+            pass
+        if _works():
+            return sent_tokenize
     return sent_tokenize

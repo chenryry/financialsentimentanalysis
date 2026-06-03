@@ -14,3 +14,4 @@ dependencies:
       - streamlit
       - plotly
       - tqdm
+      - statsmodels
